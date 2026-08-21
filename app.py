@@ -51,9 +51,6 @@ def test():
 @app.post("/analyze")
 def analyze():
     return jsonify({
-        "error": "Тестовая версия сервера. Распознавание пока отключено."
-    }), 503
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
