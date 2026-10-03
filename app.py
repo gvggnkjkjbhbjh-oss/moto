@@ -1,155 +1,252 @@
 import os
-import base64
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from openai import OpenAI
 
+
 app = Flask(__name__)
 CORS(app)
 
-# Максимальный размер изображения: 20 MB
-app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 
-# Проверяем переменную окружения с ключом OpenAI
+# =========================
+# OPENAI
+# =========================
+
 api_key = os.environ.get("OPENAI_API_KEY")
+
 if not api_key:
-    raise RuntimeError("OPENAI_API_KEY не найден в переменных окружения")
+    raise RuntimeError(
+        "OPENAI_API_KEY не найден в переменных окружения Render"
+    )
+
 client = OpenAI(api_key=api_key)
 
 MODEL = "gpt-5.6"
 
+
+# =========================
+# MAIN
+# =========================
+
 @app.get("/")
 def home():
-    return "Moto AI server is working!"
+    return "MiniMoto Help AI server is working!"
+
+
+# =========================
+# OPENAI TEST
+# =========================
 
 @app.get("/test")
 def test():
     try:
         print("TEST: проверяем OpenAI...")
+
         response = client.responses.create(
             model=MODEL,
-            input="OK"  # простой тестовый запрос
+            input="Ответь одним словом: OK"
         )
+
         answer = response.output_text
+
         print("TEST: OpenAI ответил:", answer)
-        return jsonify({"ok": True, "openai": answer, "model": MODEL})
+
+        return jsonify({
+            "ok": True,
+            "openai": answer,
+            "model": MODEL
+        })
+
     except Exception as error:
         print("TEST ERROR:", repr(error))
-        return jsonify({"ok": False, "error": str(error)}), 500
 
-def get_uploaded_image():
-    # Ищем файл в request.files под ожидаемыми именами
-    if request.files:
-        print("ANALYZE: получены файлы:", list(request.files.keys()))
-        preferred = ["file", "photo", "image", "picture", "img"]
-        for name in preferred:
-            if name in request.files:
-                file = request.files[name]
-                if file.filename:
-                    print(f"ANALYZE: найден файл '{name}': {file.filename}")
-                    return file
-        # Если под обычными именами не найден, берём первый файл
-        for name, file in request.files.items():
-            if file.filename:
-                print(f"ANALYZE: найден файл (необычное имя) '{name}': {file.filename}")
-                return file
+        return jsonify({
+            "ok": False,
+            "error": str(error)
+        }), 500
 
-    # Если запрос без multipart (raw image)
-    if request.data:
-        content_type = request.content_type or ""
-        if content_type.startswith("image/"):
-            print("ANALYZE: изображение получено в теле запроса (raw data)")
-            return None  # обозначаем, что файл придёт через request.data
 
-    return None
+# =========================
+# MINIMOTO HELP AI
+# =========================
 
-@app.post("/analyze")
-def analyze():
+@app.post("/api/ai")
+def ai_chat():
     try:
-        print("="*50)
-        print("ANALYZE: новый запрос")
-        print("Content-Type:", request.content_type)
-        print("Content-Length:", request.content_length)
-        print("Files:", list(request.files.keys()))
-        print("Form:", list(request.form.keys()))
-        print("="*50)
+        data = request.get_json(silent=True) or {}
 
-        # Пытаемся получить файл
-        uploaded_file = get_uploaded_image()
+        question = (data.get("question") or "").strip()
+        bike = data.get("bike") or {}
+        is_pro = bool(data.get("pro", False))
 
-        image_bytes = None
-        mime_type = None
-        filename = None
-
-        if uploaded_file is not None:
-            # Файл в multipart/form-data
-            image_bytes = uploaded_file.read()
-            mime_type = uploaded_file.content_type or "image/jpeg"
-            filename = uploaded_file.filename
-        elif request.data:
-            # Файл пришёл raw в теле
-            content_type = request.content_type or ""
-            if content_type.startswith("image/"):
-                image_bytes = request.data
-                mime_type = content_type
-                filename = "uploaded_image"
-
-        # Проверки
-        if not image_bytes:
-            print("ANALYZE ERROR: изображение не получено")
+        # Проверяем вопрос
+        if not question:
             return jsonify({
                 "ok": False,
-                "error": "Изображение не получено. Ожидается файл в multipart/form-data или raw image/* в теле."
+                "error": "Вопрос не указан."
             }), 400
 
-        # Проверяем MIME-тип
-        allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"]
-        if mime_type not in allowed:
-            print("ANALYZE: неизвестный MIME:", mime_type)
-            if not mime_type.startswith("image/"):
-                mime_type = "image/jpeg"
-        print(f"ANALYZE: файл '{filename}', тип: {mime_type}, размер: {len(image_bytes)} байт")
+        # =========================
+        # ДАННЫЕ МОТОЦИКЛА
+        # =========================
 
-        # Конвертация в base64 data URL
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        image_data_url = f"data:{mime_type};base64,{image_b64}"
+        bike_name = bike.get("name") or "не указан"
+        bike_year = bike.get("year") or "не указан"
+        bike_engine = bike.get("engine") or "не указан"
+        bike_wheels = bike.get("wheels") or "не указан"
+        bike_mileage = bike.get("mileage") or "не указан"
+        bike_hours = bike.get("hours") or "0"
+        bike_priority = bike.get("servicePriority") or "не указано"
 
-        # Формируем запрос к OpenAI
-        prompt = (
-            "Ты — Moto AI, помощник по мотоциклам. "
-            "Проанализируй фотографию. "
-            "Если на изображении есть мотоцикл или другой двухколёсный транспорт, определи: "
-            "марку, модель, приблизительный год, объём и тип двигателя (если можно), "
-            "значимые особенности. Если модель точно не установить, честно укажи, что определил и насколько уверен. "
-            "Отвечай кратко и по-русски."
-        )
+        # =========================
+        # SYSTEM PROMPT
+        # =========================
 
-        print("ANALYZE: отправляем изображение в OpenAI...")
+        system_prompt = """
+Ты — MiniMoto Help AI.
+
+Ты являешься помощником владельца питбайков, эндуро
+и другой мототехники.
+
+Твоя задача — помогать пользователю:
+
+- с обслуживанием мотоцикла;
+- диагностикой неисправностей;
+- расходниками;
+- запчастями;
+- планированием обслуживания;
+- моточасами;
+- заменой масла;
+- цепью и звёздами;
+- тормозами;
+- подвеской;
+- двигателем;
+- карбюратором;
+- электрикой;
+- настройкой мотоцикла;
+- объяснением технических терминов.
+
+Всегда учитывай данные конкретного мотоцикла пользователя.
+
+Правила ответа:
+
+1. Отвечай только на русском языке.
+
+2. Пиши понятно и без лишней воды.
+
+3. Если пользователь спрашивает о проблеме,
+   объясняй возможные причины по приоритету.
+
+4. Не утверждай, что неисправность точно найдена,
+   если по имеющейся информации это определить нельзя.
+
+5. Если информации недостаточно,
+   задай конкретный уточняющий вопрос.
+
+6. Не выдумывай характеристики конкретного мотоцикла.
+
+7. Если пользователь спрашивает о детали,
+   объясняй, какие характеристики нужно проверить
+   перед покупкой.
+
+8. Если пользователь спрашивает про обслуживание,
+   давай понятную последовательность действий.
+
+9. Учитывай моточасы и данные мотоцикла пользователя.
+
+10. Не делай вид, что видел мотоцикл или деталь,
+    если пользователь не предоставил соответствующую информацию.
+
+11. Если работа требует специальных инструментов
+    или может быть опасной, укажи, что её лучше выполнять
+    вместе со взрослым или специалистом.
+
+12. Не используй слишком сложные технические термины
+    без объяснения.
+
+13. Если есть несколько вариантов решения,
+    объясни различия между ними.
+
+14. Не придумывай точные моменты затяжки, зазоры,
+    размеры или регламенты, если они неизвестны
+    для конкретной модели.
+"""
+
+        # =========================
+        # КОНТЕКСТ МОТОЦИКЛА
+        # =========================
+
+        bike_context = f"""
+Данные мотоцикла пользователя:
+
+Модель: {bike_name}
+Год: {bike_year}
+Двигатель: {bike_engine}
+Колёса: {bike_wheels}
+Пробег: {bike_mileage}
+Моточасы: {bike_hours}
+Приоритет обслуживания: {bike_priority}
+
+Статус PRO:
+{"активен" if is_pro else "не активен"}
+"""
+
+        # =========================
+        # USER PROMPT
+        # =========================
+
+        user_prompt = f"""
+{bike_context}
+
+Вопрос пользователя:
+
+{question}
+"""
+
+        print("=" * 60)
+        print("MINIMOTO AI: новый запрос")
+        print("Question:", question)
+        print("Bike:", bike)
+        print("PRO:", is_pro)
+        print("=" * 60)
+
+        # =========================
+        # OPENAI
+        # =========================
+
         response = client.responses.create(
             model=MODEL,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {"type": "input_image", "image_url": image_data_url}
-                    ]
-                }
-            ]
+            instructions=system_prompt,
+            input=user_prompt
         )
-        answer = response.output_text
-        print("ANALYZE: OpenAI ответ:", answer)
 
-        return jsonify({"ok": True, "result": answer, "model": MODEL})
+        answer = response.output_text
+
+        print("MINIMOTO AI: ответ OpenAI:")
+        print(answer)
+
+        return jsonify({
+            "ok": True,
+            "answer": answer,
+            "model": MODEL
+        })
 
     except Exception as error:
-        print("ANALYZE ERROR:", repr(error))
-        return jsonify({"ok": False, "error": str(error)}), 500
+        print("MINIMOTO AI ERROR:", repr(error))
 
-@app.errorhandler(413)
-def handle_too_large(error):
-    return jsonify({"ok": False, "error": "Изображение слишком большое (макс 20 MB)."}), 413
+        return jsonify({
+            "ok": False,
+            "error": str(error)
+        }), 500
+
+
+# =========================
+# SERVER
+# =========================
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000))
+    )
